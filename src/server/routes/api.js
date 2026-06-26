@@ -245,6 +245,13 @@ router.post('/generate', async (req, res) => {
         (await getSettingFromDB(req.user.id, 'ollama_endpoint')) || 'http://localhost:11434';
       const model = (await getSettingFromDB(req.user.id, 'ollama_model')) || 'llama3';
       aiConfig = { endpoint, model };
+    } else if (engine === 'openai' || engine === 'openclaw') {
+      const endpoint =
+        (await getSettingFromDB(req.user.id, 'openai_endpoint')) || 'https://api.openai.com/v1';
+      const model = (await getSettingFromDB(req.user.id, 'openai_model')) || 'gpt-3.5-turbo';
+      const savedKey = await getSettingFromDB(req.user.id, 'openai_api_key');
+      const openaiApiKey = savedKey ? decrypt(savedKey) : '';
+      aiConfig = { endpoint, apiKey: openaiApiKey, model };
     } else {
       apiKey = await resolveGeminiApiKey(req.user.id, req.token);
       if (!apiKey) {
@@ -613,6 +620,13 @@ router.post('/posts/schedule-keywords', validateBody(scheduleKeywordsSchema), as
         (await getSettingFromDB(req.user.id, 'ollama_endpoint')) || 'http://localhost:11434';
       const model = (await getSettingFromDB(req.user.id, 'ollama_model')) || 'llama3';
       aiConfig = { endpoint, model };
+    } else if (engine === 'openai' || engine === 'openclaw') {
+      const endpoint =
+        (await getSettingFromDB(req.user.id, 'openai_endpoint')) || 'https://api.openai.com/v1';
+      const model = (await getSettingFromDB(req.user.id, 'openai_model')) || 'gpt-3.5-turbo';
+      const savedKey = await getSettingFromDB(req.user.id, 'openai_api_key');
+      const openaiApiKey = savedKey ? decrypt(savedKey) : '';
+      aiConfig = { endpoint, apiKey: openaiApiKey, model };
     } else {
       const apiKey = await resolveGeminiApiKey(req.user.id, req.token);
       if (!apiKey) {
