@@ -153,6 +153,55 @@ async function generateWithOllama(endpoint, model, keyword, title = null) {
 }
 
 /**
+ * OpenAI 호환 API (Openclaw 등)를 이용한 텍스트 생성
+ */
+async function generateWithOpenAI(endpoint, apiKey, model, keyword, title = null) {
+  try {
+    let baseUrl = (endpoint || 'https://api.openai.com/v1').trim();
+    if (!baseUrl.endsWith('/chat/completions')) {
+      baseUrl = baseUrl.endsWith('/')
+        ? `${baseUrl}chat/completions`
+        : `${baseUrl}/chat/completions`;
+    }
+
+    console.log(`[OpenAI] Requesting URL: ${baseUrl} (Model: ${model || 'gpt-3.5-turbo'})`);
+
+    const prompt = title
+      ? `당신은 블로그 포스팅 전문가입니다. 반드시 아래 형식을 지켜주세요.\n[TITLE]${title}[/TITLE]\n[CONTENT]본문[/CONTENT]\n\n지정된 제목 "${title}"과 주제 "${keyword}"에 맞춰 블로그 포스팅 본문을 작성해줘.`
+      : `당신은 블로그 포스팅 전문가입니다. 반드시 아래 형식을 지켜주세요.\n[TITLE]제목[/TITLE]\n[CONTENT]본문[/CONTENT]\n\n${keyword} 주제로 블로그 포스팅 원고를 작성해줘.`;
+
+    const response = await fetch(baseUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: model || 'gpt-3.5-turbo',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.7,
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`OpenAI API error: ${response.status} ${errText}`);
+    }
+
+    const data = await response.json();
+    const fullText = data.choices[0].message.content;
+    const parsed = parseAIResponse(fullText);
+    if (title) {
+      parsed.title = title;
+    }
+    return { ...parsed, modelUsed: model || 'gpt-3.5-turbo' };
+  } catch (error) {
+    console.error('OpenAI Content Generation Error:', error);
+    throw new Error(`Failed to generate with OpenAI: ${error.message}`);
+  }
+}
+
+/**
  * AI 응답 파싱 (제목/본문 추출)
  */
 function parseAIResponse(fullText) {
@@ -177,8 +226,11 @@ export async function generateContent(engine, apiKeyOrConfig, keyword, title = n
   } else if (engine === 'ollama') {
     const { endpoint, model } = apiKeyOrConfig;
     return await generateWithOllama(endpoint, model, keyword, title);
+  } else if (engine === 'openai' || engine === 'openclaw') {
+    const { endpoint, apiKey, model } = apiKeyOrConfig;
+    return await generateWithOpenAI(endpoint, apiKey, model, keyword, title);
   } else {
-    throw new Error('OpenAI 서비스가 비활성화되었습니다. Gemini 또는 Ollama를 사용해주세요.');
+    throw new Error('지원하지 않는 엔진입니다. Gemini, Ollama 또는 OpenAI를 사용해주세요.');
   }
 }
 
@@ -294,6 +346,49 @@ export async function generateNextKeywordWithGemini(apiKey, title, content) {
 }
 
 /**
+ * OpenAI 호환 API를 이용한 이전 글 기반 연관 키워드 추출
+ */
+export async function generateNextKeywordWithOpenAI(endpoint, apiKey, model, title, content) {
+  try {
+    let baseUrl = (endpoint || 'https://api.openai.com/v1').trim();
+    if (!baseUrl.endsWith('/chat/completions')) {
+      baseUrl = baseUrl.endsWith('/')
+        ? `${baseUrl}chat/completions`
+        : `${baseUrl}/chat/completions`;
+    }
+
+    const response = await fetch(baseUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: model || 'gpt-3.5-turbo',
+        messages: [
+          {
+            role: 'user',
+            content: `당신은 블로그 SEO 전문가입니다. 아래 제공된 블로그 글의 제목과 본문을 분석하여, 자연스럽게 이어지거나 독자가 흥미를 가질 만한 후속 연관 키워드 1개를 단어 형태로만 추천해주세요. 다른 설명 없이 오직 단어(예: 신용카드 추천)로만 응답하세요.\n\n제목: ${title}\n본문: ${content.substring(0, 500)}...`,
+          },
+        ],
+        stream: false,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`OpenAI API error: ${response.statusText}`);
+    }
+    const data = await response.json();
+    return data.choices[0].message.content
+      .trim()
+      .replace(/^[^a-zA-Z0-9가-힣\s]+|[^a-zA-Z0-9가-힣\s]+$/g, '');
+  } catch (error) {
+    console.error('OpenAI Next Keyword Generation Error:', error);
+    return '';
+  }
+}
+
+/**
  * Ollama를 이용한 이전 글 기반 연관 키워드 추출
  */
 export async function generateNextKeywordWithOllama(endpoint, model, title, content) {
@@ -337,6 +432,9 @@ export async function generateNextKeyword(engine, apiKeyOrConfig, title, content
   } else if (engine === 'ollama') {
     const { endpoint, model } = apiKeyOrConfig;
     return await generateNextKeywordWithOllama(endpoint, model, title, content);
+  } else if (engine === 'openai' || engine === 'openclaw') {
+    const { endpoint, apiKey, model } = apiKeyOrConfig;
+    return await generateNextKeywordWithOpenAI(endpoint, apiKey, model, title, content);
   }
   return '';
 }

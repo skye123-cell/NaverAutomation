@@ -331,39 +331,81 @@ export async function processScheduledPosts() {
                       post.user_id,
                     );
 
-                    // Gemini API 키 조회
-                    let apiKey = await getGlobalSetting('master_gemini_api_key');
-                    if (!apiKey || apiKey === 'YOUR_KEY_HERE') {
-                      apiKey = await new Promise((resolve) => {
+                    // AI 엔진 설정 획득 (OpenAI/Openclaw, Ollama 또는 Gemini)
+                    const engine = post.engine || 'gemini';
+                    let aiConfig = null;
+
+                    if (engine === 'openai' || engine === 'openclaw') {
+                      const endpoint = await new Promise((resolve) => {
                         db.get(
-                          "SELECT value FROM settings WHERE (user_id = ? OR user_id IS NULL) AND key = 'gemini_api_key' ORDER BY user_id DESC LIMIT 1",
+                          "SELECT value FROM settings WHERE user_id = ? AND key = 'openai_endpoint'",
                           [post.user_id],
-                          (err, row) => {
-                            if (err || !row || !row.value) return resolve(null);
-                            try {
-                              resolve(decrypt(row.value));
-                            } catch {
-                              resolve(null);
-                            }
-                          },
+                          (err, row) => resolve(row ? row.value : 'https://api.openai.com/v1'),
                         );
                       });
-                    }
-
-                    if (apiKey) {
-                      const geminiModel = await new Promise((resolve) => {
+                      const model = await new Promise((resolve) => {
+                        db.get(
+                          "SELECT value FROM settings WHERE user_id = ? AND key = 'openai_model'",
+                          [post.user_id],
+                          (err, row) => resolve(row ? row.value : 'gpt-3.5-turbo'),
+                        );
+                      });
+                      const savedKey = await new Promise((resolve) => {
+                        db.get(
+                          "SELECT value FROM settings WHERE user_id = ? AND key = 'openai_api_key'",
+                          [post.user_id],
+                          (err, row) => resolve(row ? row.value : null),
+                        );
+                      });
+                      const openaiApiKey = savedKey ? decrypt(savedKey) : '';
+                      aiConfig = { endpoint, apiKey: openaiApiKey, model };
+                    } else if (engine === 'ollama') {
+                      const endpoint = await new Promise((resolve) => {
+                        db.get(
+                          "SELECT value FROM settings WHERE user_id = ? AND key = 'ollama_endpoint'",
+                          [post.user_id],
+                          (err, row) => resolve(row ? row.value : 'http://localhost:11434'),
+                        );
+                      });
+                      const model = await new Promise((resolve) => {
+                        db.get(
+                          "SELECT value FROM settings WHERE user_id = ? AND key = 'ollama_model'",
+                          [post.user_id],
+                          (err, row) => resolve(row ? row.value : 'llama3'),
+                        );
+                      });
+                      aiConfig = { endpoint, model };
+                    } else {
+                      // Gemini API 키 조회
+                      let apiKey = await getGlobalSetting('master_gemini_api_key');
+                      if (!apiKey || apiKey === 'YOUR_KEY_HERE') {
+                        apiKey = await new Promise((resolve) => {
+                          db.get(
+                            "SELECT value FROM settings WHERE (user_id = ? OR user_id IS NULL) AND key = 'gemini_api_key' ORDER BY user_id DESC LIMIT 1",
+                            [post.user_id],
+                            (err, row) => {
+                              if (err || !row || !row.value) return resolve(null);
+                              try {
+                                resolve(decrypt(row.value));
+                              } catch {
+                                resolve(null);
+                              }
+                            },
+                          );
+                        });
+                      }
+                      const model = await new Promise((resolve) => {
                         db.get(
                           "SELECT value FROM settings WHERE user_id = ? AND key = 'gemini_model'",
                           [post.user_id],
                           (_err, row) => resolve(row ? row.value : 'auto'),
                         );
                       });
+                      aiConfig = { apiKey, model };
+                    }
 
-                      const newContent = await generateContent(
-                        'gemini',
-                        { apiKey, model: geminiModel },
-                        post.keyword,
-                      );
+                    if (aiConfig && (aiConfig.apiKey || engine === 'ollama')) {
+                      const newContent = await generateContent(engine, aiConfig, post.keyword);
                       // [비활성화] 재발행 시 AI 태그 생성 기능 주석 처리 및 기존 태그 유지
                       // const newTags = await generateTagsWithGemini(
                       //   apiKey,
@@ -516,11 +558,35 @@ export async function checkAndExtendKeywordQueue(userId) {
         fixedKeyword = lastPost.keyword; // 태그가 없을 경우 이전 키워드를 고정 키워드로 백업
       }
 
-      // AI 엔진 설정 획득 (Ollama 또는 Gemini)
+      // AI 엔진 설정 획득 (OpenAI/Openclaw, Ollama 또는 Gemini)
       const engine = lastPost.engine || 'gemini';
       let aiConfig = null;
 
-      if (engine === 'ollama') {
+      if (engine === 'openai' || engine === 'openclaw') {
+        const endpoint = await new Promise((resolve) => {
+          db.get(
+            "SELECT value FROM settings WHERE user_id = ? AND key = 'openai_endpoint'",
+            [userId],
+            (err, row) => resolve(row ? row.value : 'https://api.openai.com/v1'),
+          );
+        });
+        const model = await new Promise((resolve) => {
+          db.get(
+            "SELECT value FROM settings WHERE user_id = ? AND key = 'openai_model'",
+            [userId],
+            (err, row) => resolve(row ? row.value : 'gpt-3.5-turbo'),
+          );
+        });
+        const savedKey = await new Promise((resolve) => {
+          db.get(
+            "SELECT value FROM settings WHERE user_id = ? AND key = 'openai_api_key'",
+            [userId],
+            (err, row) => resolve(row ? row.value : null),
+          );
+        });
+        const openaiApiKey = savedKey ? decrypt(savedKey) : '';
+        aiConfig = { endpoint, apiKey: openaiApiKey, model };
+      } else if (engine === 'ollama') {
         const endpoint = await new Promise((resolve) => {
           db.get(
             "SELECT value FROM settings WHERE user_id = ? AND key = 'ollama_endpoint'",
@@ -562,7 +628,7 @@ export async function checkAndExtendKeywordQueue(userId) {
         if (!apiKey) {
           emitLog(
             'error',
-            '[자동 연장] Gemini API 키가 없어 키워드 대기열 연장에 실패했습니다.',
+            `[자동 연장] ${engine.toUpperCase()} API 키가 없어 키워드 대기열 연장에 실패했습니다.`,
             userId,
           );
           return;
